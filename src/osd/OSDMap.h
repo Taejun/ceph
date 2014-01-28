@@ -205,7 +205,7 @@ private:
   vector<osd_info_t> osd_info;
   ceph::shared_ptr< map<pg_t,vector<int> > > pg_temp;  // temp pg mapping (e.g. while we rebuild)
   ceph::shared_ptr< map<pg_t,int > > primary_temp;  // temp primary mapping (e.g. while we rebuild)
-  vector<__u32> osd_primary_affinity; ///< 16.16 fixed point, 0x10000 = baseline
+  ceph::shared_ptr< vector<__u32> > osd_primary_affinity; ///< 16.16 fixed point, 0x10000 = baseline
 
   map<int64_t,pg_pool_t> pools;
   map<int64_t,string> pool_name;
@@ -320,11 +320,15 @@ private:
 
   void set_primary_affinity(int o, int w) {
     assert(o < max_osd);
-    osd_primary_affinity[o] = w;
+    if (osd_primary_affinity)
+      osd_primary_affinity.reset(new vector<__u32>(max_osd, 0));
+    (*osd_primary_affinity)[o] = w;
   }
   unsigned get_primary_affinity(int o) const {
     assert(o < max_osd);
-    return osd_primary_affinity[o];
+    if (!osd_primary_affinity)
+      return 0x10000;
+    return (*osd_primary_affinity)[o];
   }
   float get_primary_affinityf(int o) const {
     return (float)get_primary_affinityf(o) / (float)0x10000;
@@ -525,14 +529,16 @@ public:
 private:
   /// pg -> (raw osd list)
   int _pg_to_osds(const pg_pool_t& pool, pg_t pg,
-                  vector<int> *osds, int *primary) const;
+                  vector<int> *osds, int *primary,
+		  ps_t *ppps) const;
   void _remove_nonexistent_osds(const pg_pool_t& pool, vector<int>& osds) const;
-  void _apply_primary_affinity(ps_t seed, const pg_pool_t& pool,
-			       vector<int> *osds,
-			       int *primary) const;
+
+  bool _is_primary_affinity(const vector<int>& osds) const;
+  void _apply_primary_affinity(ps_t seed, const pg_pool_t& pool, bool first,
+			       vector<int> *osds, int *primary) const;
 
   /// pg -> (up osd list)
-  void _raw_to_up_osds(pg_t pg, const vector<int>& raw,
+  void _raw_to_up_osds(const pg_pool_t& pool, const vector<int>& raw,
                        vector<int> *up, int *primary) const;
 
   /**
