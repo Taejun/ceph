@@ -3499,15 +3499,15 @@ int FileStore::getattrs(coll_t cid, const ghobject_t& oid, map<string,bufferptr>
   Index index;
   dout(15) << "getattrs " << cid << "/" << oid << dendl;
   FDRef fd;
-  bool spill_out = true;
   bufferptr bp(10);
+  bool spill_out = true;
+  char buf[1];
 
   int r = lfn_open(cid, oid, false, &fd);
   if (r < 0) {
     goto out;
   }
 
-  char buf[100];
   r = chain_fgetxattr(**fd, XATTR_SPILL_OUT_NAME, buf, sizeof(buf));
   if (r >= 0 && !strncmp(buf, XATTR_NO_SPILL_OUT, sizeof(XATTR_NO_SPILL_OUT)))
     spill_out = false;
@@ -3587,7 +3587,7 @@ int FileStore::_setattrs(coll_t cid, const ghobject_t& oid, map<string,bufferptr
     goto out;
   }
 
-  char buf[100];
+  char buf[1];
   r = chain_fgetxattr(**fd, XATTR_SPILL_OUT_NAME, buf, sizeof(buf));
   if (r >= 0 && !strncmp(buf, XATTR_NO_SPILL_OUT, sizeof(XATTR_NO_SPILL_OUT)))
     spill_out = 0;
@@ -3634,8 +3634,8 @@ int FileStore::_setattrs(coll_t cid, const ghobject_t& oid, map<string,bufferptr
   }
 
   if (spill_out != 1 && omap_set.size()) {
-    bufferptr bp(XATTR_SPILL_OUT, sizeof(XATTR_SPILL_OUT));
-    inline_to_set.insert(make_pair(spill_out_name, bp));
+    chain_fsetxattr(**fd, XATTR_SPILL_OUT_NAME, XATTR_SPILL_OUT,
+		    sizeof(XATTR_SPILL_OUT));
   }
 
   r = _fsetattrs(**fd, inline_to_set);
@@ -3682,7 +3682,7 @@ int FileStore::_rmattr(coll_t cid, const ghobject_t& oid, const char *name,
     goto out;
   }
 
-  char buf[100];
+  char buf[1];
   r = chain_fgetxattr(**fd, XATTR_SPILL_OUT_NAME, buf, sizeof(buf));
   if (r >= 0 && !strncmp(buf, XATTR_NO_SPILL_OUT, sizeof(XATTR_NO_SPILL_OUT))) {
     spill_out = false;
@@ -3730,7 +3730,7 @@ int FileStore::_rmattrs(coll_t cid, const ghobject_t& oid,
     goto out;
   }
 
-  char buf[100];
+  char buf[1];
   r = chain_fgetxattr(**fd, XATTR_SPILL_OUT_NAME, buf, sizeof(buf));
   if (r >= 0 && !strncmp(buf, XATTR_NO_SPILL_OUT, sizeof(XATTR_NO_SPILL_OUT))) {
     spill_out = false;
@@ -3745,36 +3745,37 @@ int FileStore::_rmattrs(coll_t cid, const ghobject_t& oid,
       if (r < 0)
 	break;
     }
-
-    if (spill_out) {
-      chain_fsetxattr(**fd, XATTR_SPILL_OUT_NAME, XATTR_NO_SPILL_OUT, sizeof(XATTR_NO_SPILL_OUT));
-    }
   }
-  lfn_close(fd);
 
   if (!spill_out) {
     dout(10) << __func__ << " no xattr exists in object_map r = " << r << dendl;
-    goto out;
+    goto out_close;
   }
 
   r = get_index(cid, &index);
   if (r < 0) {
     dout(10) << __func__ << " could not get index r = " << r << dendl;
-    return r;
+    goto out_close;
   }
   r = object_map->get_all_xattrs(oid, &omap_attrs);
   if (r < 0 && r != -ENOENT) {
     dout(10) << __func__ << " could not get omap_attrs r = " << r << dendl;
     assert(!m_filestore_fail_eio || r != -EIO);
-    return r;
+    goto out_close;
   }
   r = object_map->remove_xattrs(oid, omap_attrs, &spos);
   if (r < 0 && r != -ENOENT) {
     dout(10) << __func__ << " could not remove omap_attrs r = " << r << dendl;
-    return r;
+    goto out_close;
   }
   if (r == -ENOENT)
     r = 0;
+
+  chain_fsetxattr(**fd, XATTR_SPILL_OUT_NAME, XATTR_NO_SPILL_OUT,
+		  sizeof(XATTR_NO_SPILL_OUT));
+
+ out_close:
+  lfn_close(fd);
  out:
   dout(10) << "rmattrs " << cid << "/" << oid << " = " << r << dendl;
   return r;
